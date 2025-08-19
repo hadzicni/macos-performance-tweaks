@@ -15,7 +15,7 @@ if [[ -f $LOGFILE ]]; then
 fi
 exec > >(tee -a "$LOGFILE") 2>&1
 
-trap "echo ''; echo \"${RED}Script abgebrochen. Logfile: $LOGFILE${RESET}\"; exit 130" INT TERM
+trap "echo ''; echo \"${RED}Script aborted. Logfile: $LOGFILE${RESET}\"; exit 130" INT TERM
 
 if [[ ! -t 1 ]]; then
   echo "${YELLOW}⚠️  This script is not running in an interactive terminal. User interaction might not work as expected.${RESET}"
@@ -29,13 +29,11 @@ MACOS_MINOR=$(echo "$MACOS_VERSION" | cut -d. -f2)
 MAC_MODEL=$(sysctl -n hw.model 2>/dev/null || echo "unknown")
 RAM_GB=$(( $(sysctl -n hw.memsize) / 1024 / 1024 / 1024 ))" GB"
 CPU=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "unknown")
-UPTIME=$(uptime | awk -F'( |,|:)+' '{if ($7 ~ /min/) print $6" min"; else print $6":"$7" h";}')
+UPTIME=$(uptime -p 2>/dev/null || echo "$(uptime)")
 
 IS_VM="No"
-if sysctl -n machdep.cpu.features 2>/dev/null | grep -q VMX; then
-  if sysctl -n hw.optional.hypervisor 2>/dev/null | grep -q 1; then
-    IS_VM="Yes"
-  fi
+if sysctl -n kern.hv_vmm_present 2>/dev/null | grep -q 1; then
+  IS_VM="Yes"
 fi
 
 OCLP="No"
@@ -45,7 +43,7 @@ if [ -d "/Library/Application Support/OpenCore-Patcher" ] || \
   OCLP="Yes"
 fi
 
-SCRIPT_VERSION="2024-06-13"
+SCRIPT_VERSION="2025-08-19"
 MIN_MACOS=12
 
 if ! sudo -v; then
@@ -85,13 +83,6 @@ MODE="interactive"
 
 declare -A SUMMARY
 
-function check_success() {
-  if [[ $? -ne 0 ]]; then
-    echo "${RED}❌ An error occurred. Exiting script.${RESET}"
-    exit 1
-  fi
-}
-
 function ask() {
   local prompt="$1"
   local __resultvar=$2
@@ -109,7 +100,7 @@ function ask() {
 
 ask "1️⃣ Reduce UI transparency and motion?" do_ui
 ask "2️⃣ Disable Spotlight indexing?" do_spotlight
-ask "3️⃣ Disable iCloud default save location?" do_icloud
+ask "3️⃣ Disable iCloud as default save location?" do_icloud
 if (( MACOS_MAJOR > 12 )) || (( MACOS_MAJOR == 12 && MACOS_MINOR >= 0 )); then
   if (( MACOS_MAJOR >= 13 )); then
     ask "4️⃣ Disable Stage Manager?" do_stage
@@ -131,9 +122,7 @@ echo "${BLUE}⚙️  Applying selected tweaks...${RESET}"
 
 if [[ "$do_ui" =~ ^[Yy]$ ]]; then
   defaults write com.apple.universalaccess reduceTransparency -bool true
-  check_success
   defaults write com.apple.universalaccess reduceMotion -bool true
-  check_success
   echo "${GREEN}→ Reduced UI transparency and motion${RESET}"
   SUMMARY["UI transparency/motion"]="Applied"
 else
@@ -141,8 +130,7 @@ else
 fi
 
 if [[ "$do_spotlight" =~ ^[Yy]$ ]]; then
-  sudo mdutil -a -i off
-  check_success
+  sudo mdutil -a -i off || true
   echo "${GREEN}→ Disabled Spotlight indexing${RESET}"
   SUMMARY["Spotlight indexing"]="Applied"
 else
@@ -151,8 +139,7 @@ fi
 
 if [[ "$do_icloud" =~ ^[Yy]$ ]]; then
   defaults write NSGlobalDomain NSDocumentSaveNewDocumentsToCloud -bool false
-  check_success
-  echo "${GREEN}→ Disabled iCloud default save${RESET}"
+  echo "${GREEN}→ Disabled iCloud default save location${RESET}"
   SUMMARY["iCloud default save"]="Applied"
 else
   SUMMARY["iCloud default save"]="Skipped"
@@ -160,13 +147,12 @@ fi
 
 if [[ "$do_stage" =~ ^[Yy]$ ]]; then
   if (( MACOS_MAJOR >= 13 )); then
-    defaults delete com.apple.WindowManager GloballyEnabled 2>/dev/null
-    check_success
+    defaults write com.apple.WindowManager GloballyEnabled -bool false
     echo "${GREEN}→ Disabled Stage Manager${RESET}"
     SUMMARY["Stage Manager"]="Applied"
   else
-    echo "${YELLOW}→ Stage Manager nicht unterstützt auf dieser macOS-Version${RESET}"
-    SUMMARY["Stage Manager"]="Nicht verfügbar"
+    echo "${YELLOW}→ Stage Manager not supported on this macOS version${RESET}"
+    SUMMARY["Stage Manager"]="Unavailable"
   fi
 else
   SUMMARY["Stage Manager"]="Skipped"
@@ -174,11 +160,8 @@ fi
 
 if [[ "$do_widgets" =~ ^[Yy]$ ]]; then
   defaults write com.apple.controlcenter "NSStatusItem Visible NowPlaying" -bool false
-  check_success
   defaults write com.apple.controlcenter "NSStatusItem Visible ScreenRecording" -bool false
-  check_success
   defaults write com.apple.controlcenter "NSStatusItem Visible StageManager" -bool false
-  check_success
   echo "${GREEN}→ Hid Control Center widgets${RESET}"
   SUMMARY["Control Center widgets"]="Applied"
 else
@@ -187,11 +170,8 @@ fi
 
 if [[ "$do_updates" =~ ^[Yy]$ ]]; then
   sudo softwareupdate --schedule off
-  check_success
   sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool false
-  check_success
   sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false
-  check_success
   echo "${GREEN}→ Disabled automatic software updates${RESET}"
   SUMMARY["Software updates"]="Applied"
 else
@@ -200,13 +180,9 @@ fi
 
 if [[ "$do_siri" =~ ^[Yy]$ ]]; then
   defaults write com.apple.assistant.support "Assistant Enabled" -bool false
-  check_success
   defaults write com.apple.assistant.support "Siri Data Sharing Opt-In Status" -int 2
-  check_success
   defaults write com.apple.SubmitDiagInfo AutoSubmit -bool false
-  check_success
-  sudo launchctl unload -w /System/Library/LaunchDaemons/com.apple.SubmitDiagInfo.plist 2>/dev/null
-  check_success
+  sudo launchctl unload -w /System/Library/LaunchDaemons/com.apple.SubmitDiagInfo.plist 2>/dev/null || true
   echo "${GREEN}→ Disabled Siri and analytics${RESET}"
   SUMMARY["Siri and analytics"]="Applied"
 else
@@ -216,10 +192,10 @@ fi
 if [[ "$do_caches" =~ ^[Yy]$ ]]; then
   read "?Clearing caches may cause unexpected behavior. Continue? (y/N): " cache_confirm
   if [[ "$cache_confirm" =~ ^[Yy]$ ]]; then
-    rm -rf ~/Library/Caches/*
-    check_success
-    sudo rm -rf /Library/Caches/*
-    check_success
+    set +e
+    rm -rf ~/Library/Caches/* 2>/dev/null
+    sudo rm -rf /Library/Caches/* 2>/dev/null
+    set -e
     echo "${GREEN}→ Cleaned user and system caches${RESET}"
     SUMMARY["System/user caches"]="Applied"
   else
@@ -231,14 +207,8 @@ else
 fi
 
 if [[ "$do_gatekeeper" =~ ^[Yy]$ ]]; then
-  if [[ $EUID -ne 0 ]]; then
-    echo "${RED}→ Gatekeeper disabling requires root privileges. Please restart the script with 'sudo'.${RESET}"
-    exit 1
-  fi
-  spctl --master-disable
-  check_success
+  sudo spctl --master-disable || true
   defaults write com.apple.LaunchServices LSQuarantine -bool false
-  check_success
   echo "${GREEN}→ Disabled Gatekeeper and app quarantine${RESET}"
   SUMMARY["Gatekeeper/quarantine"]="Applied"
 else
@@ -248,8 +218,7 @@ fi
 if [[ "$do_derived" =~ ^[Yy]$ ]]; then
   read "?Delete Xcode DerivedData? (y/N): " derived_confirm
   if [[ "$derived_confirm" =~ ^[Yy]$ ]]; then
-    rm -rf ~/Library/Developer/Xcode/DerivedData/*
-    check_success
+    rm -rf ~/Library/Developer/Xcode/DerivedData/* 2>/dev/null || true
     echo "${GREEN}→ Deleted Xcode DerivedData${RESET}"
     SUMMARY["Xcode DerivedData"]="Applied"
   else
