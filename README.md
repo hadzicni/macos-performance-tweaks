@@ -45,8 +45,13 @@ All actions are logged to `~/macos_tweaks.log`.
 ## Warnings
 
 - Some tweaks require root privileges (sudo).
-- Changes may affect system features or apps.
+- Disabling Spotlight indexing will make search unavailable until re-enabled with sudo mdutil -a -i on.
+- Cleaning caches may cause apps to rebuild data (slower start until reindexed).
+- Changes may affect system features or third-party applications.
 - Use at your own risk!
+
+## Contributing
+Contributions, suggestions, and pull requests are welcome.
 
 ## License
 
